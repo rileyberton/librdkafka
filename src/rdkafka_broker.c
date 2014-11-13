@@ -2010,11 +2010,12 @@ static int rd_kafka_broker_produce_toppar (rd_kafka_broker_t *rkb,
 		msgcnt = ((iovcnt / 4) - 3);
 	}
 
-	if (0)
+	if (1)
 		rd_rkb_dbg(rkb, MSG, "PRODUCE",
-			   "Serve %i/%i messages (%i iovecs) "
+			   "Serve %i/%i+%i messages (%i iovecs) "
 			   "for %.*s [%"PRId32"] (%"PRIu64" bytes)",
-			   msgcnt, rktp->rktp_msgq.rkmq_msg_cnt,
+			   msgcnt, rktp->rktp_xmit_msgq.rkmq_msg_cnt,
+			   rktp->rktp_msgq.rkmq_msg_cnt,
 			   iovcnt,
 			   RD_KAFKAP_STR_PR(rkt->rkt_topic),
 			   rktp->rktp_partition,
@@ -2141,6 +2142,14 @@ static int rd_kafka_broker_produce_toppar (rd_kafka_broker_t *rkb,
 
 	/* No messages added, bail out early. */
 	if (unlikely(rkbuf->rkbuf_msgq.rkmq_msg_cnt == 0)) {
+		rd_rkb_dbg(rkb, TOPIC, "TOPPAR",
+			   "%.*s [%"PRId32"] no messages in rkbuf, despite msgcnt %i and xmitq cnt %i",
+			   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
+					    rkt_topic),
+			   rktp->rktp_partition,
+			   msgcnt,
+			   rktp->rktp_xmit_msgq.rkmq_msg_cnt);
+
 		rd_kafka_buf_destroy(rkbuf);
 		return -1;
 	}
@@ -2532,8 +2541,15 @@ static void rd_kafka_broker_producer_serve (rd_kafka_broker_t *rkb) {
 							       &timedout,
 							       now);
 
-				if (rktp->rktp_xmit_msgq.rkmq_msg_cnt == 0)
+				if (rktp->rktp_xmit_msgq.rkmq_msg_cnt == 0) {
+					rd_rkb_dbg(rkb, TOPIC, "TOPPAR",
+						   "%.*s [%"PRId32"] skip empty xmitq",
+						   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
+								    rkt_topic),
+						   rktp->rktp_partition);
+
 					continue;
+				}
 				/* Attempt to fill the batch size, but limit
 				 * our waiting to queue.buffering.max.ms
 				 * and batch.num.messages. */
@@ -2544,10 +2560,28 @@ static void rd_kafka_broker_producer_serve (rd_kafka_broker_t *rkb) {
 				    rkb->rkb_rk->rk_conf.
 				    batch_num_messages) {
 					/* Wait for more messages */
+					rd_rkb_dbg(rkb, TOPIC, "TOPPAR",
+						   "%.*s [%"PRId32"] wait for more messages (tx_last_xmit %"PRIu64" + buffering_max_ms %i > now %"PRIu64" && xmitq cnt %i < batch_num_messages %i",
+						   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
+								    rkt_topic),
+						   rktp->rktp_partition,
+						   rktp->rktp_ts_last_xmit,
+						   rkb->rkb_rk->rk_conf.buffering_max_ms * 1000,
+						   now,
+						   rktp->rktp_xmit_msgq.rkmq_msg_cnt, rkb->rkb_rk->rk_conf.batch_num_messages);
+
 					continue;
 				}
 
 				rktp->rktp_ts_last_xmit = now;
+
+				rd_rkb_dbg(rkb, TOPIC, "TOPPAR",
+					   "%.*s [%"PRId32"] do produce_toppar() for %i messages (ts_last is %"PRIu64")",
+					   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
+							    rkt_topic),
+					   rktp->rktp_partition,
+					   rktp->rktp_xmit_msgq.rkmq_msg_cnt,
+					   now);
 
 				/* Send Produce requests for this toppar */
 				while (rktp->rktp_xmit_msgq.rkmq_msg_cnt > 0) {
