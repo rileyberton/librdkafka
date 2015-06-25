@@ -36,6 +36,8 @@
 #include <signal.h>
 #include <stdlib.h>
 
+#include "an_md.h"
+
 #include "rdkafka_int.h"
 #include "rdkafka_msg.h"
 #include "rdkafka_broker.h"
@@ -1214,6 +1216,7 @@ static void rd_kafka_term_sig_handler (int sig) {
 }
 
 static void rd_kafka_global_init (void) {
+	an_md_probe();
 }
 
 rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *conf,
@@ -1911,6 +1914,9 @@ rd_kafka_metadata (rd_kafka_t *rk, int all_topics,
         rd_kafka_q_t *replyq;
         rd_kafka_broker_t *rkb;
         rd_kafka_op_t *rko;
+
+	/* be nice to naive callers and NULL out the result pointer */
+	*metadatap = NULL;
 
         /* Query any broker that is up, and if none are up pick the first one,
          * if we're lucky it will be up before the timeout */

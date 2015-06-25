@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include "an_md.h"
 
 #ifndef TIMEVAL_TO_TIMESPEC
 #define TIMEVAL_TO_TIMESPEC(tv,ts) do {		\
@@ -64,10 +65,21 @@ static inline rd_ts_t rd_clock (void) {
 	gettimeofday(&tv, NULL);
 	return ((rd_ts_t)tv.tv_sec * 1000000LLU) + (rd_ts_t)tv.tv_usec;
 #else
+
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return ((rd_ts_t)ts.tv_sec * 1000000LLU) + 
+	return ((rd_ts_t)ts.tv_sec * 1000000LLU) +
 		((rd_ts_t)ts.tv_nsec / 1000LLU);
+#if 0	
+	static uint64_t ticks = 0;
+
+	uint64_t now = an_md_rdtsc();
+	if (unlikely(ticks == 0) || now - ticks > 100000000) {
+
+		ticks = now;
+	}
+	return an_md_rdtsc_to_us(now);
+#endif	
 #endif
 }
 

@@ -1034,7 +1034,7 @@ int main (int argc, char **argv) {
 				}
 
 				/* Poll to handle delivery reports */
-				rd_kafka_poll(rk, 10);
+				rd_kafka_poll(rk, 0);
 
                                 print_stats(mode, otype, compression);
 			}

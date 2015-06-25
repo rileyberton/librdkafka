@@ -2007,242 +2007,269 @@ static int rd_kafka_broker_produce_toppar (rd_kafka_broker_t *rkb,
 	 *  msgcnt * messagepayload
 	 * = 3 + (4 * msgcnt)
 	 *
-	 * We are bound both by configuration and IOV_MAX
+	 * We are bound both by configuration and IOV_MAX, so loop
+	 * until we get close to buffering_max_ms
 	 */
 
-	if (rktp->rktp_xmit_msgq.rkmq_msg_cnt > 0)
+	rd_ts_t start = rd_clock();
+	
+	while (rktp->rktp_xmit_msgq.rkmq_msg_cnt > 0
+	       && rd_clock() - start < ((rkb->rkb_rk->rk_conf.buffering_max_ms * 1000) - 500)) // leave half an ms
+	{
 		rd_kafka_assert(rkb->rkb_rk,
                                 TAILQ_FIRST(&rktp->rktp_xmit_msgq.rkmq_msgs));
-	msgcnt = RD_MIN(rktp->rktp_xmit_msgq.rkmq_msg_cnt,
-			rkb->rkb_rk->rk_conf.batch_num_messages);
-	rd_kafka_assert(rkb->rkb_rk, msgcnt > 0);
-	iovcnt = 3 + (4 * msgcnt);
+		msgcnt = RD_MIN(rktp->rktp_xmit_msgq.rkmq_msg_cnt,
+				rkb->rkb_rk->rk_conf.batch_num_messages);
+		rd_kafka_assert(rkb->rkb_rk, msgcnt > 0);
+		iovcnt = 3 + (4 * msgcnt);
 
-	if (iovcnt > RD_KAFKA_PAYLOAD_IOV_MAX) {
-		iovcnt = RD_KAFKA_PAYLOAD_IOV_MAX;
-		msgcnt = ((iovcnt / 4) - 3);
-	}
-
-	if (0)
-		rd_rkb_dbg(rkb, MSG, "PRODUCE",
-			   "Serve %i/%i messages (%i iovecs) "
-			   "for %.*s [%"PRId32"] (%"PRIu64" bytes)",
-			   msgcnt, rktp->rktp_msgq.rkmq_msg_cnt,
-			   iovcnt,
-			   RD_KAFKAP_STR_PR(rkt->rkt_topic),
-			   rktp->rktp_partition,
-			   rktp->rktp_msgq.rkmq_msg_bytes);
-
-
-	/* Allocate iovecs to hold all headers and messages,
-	 * and allocate auxilliery space for the headers. */
-	rkbuf = rd_kafka_buf_new(iovcnt,
-				 sizeof(*prodhdr) +
-				 (sizeof(*msghdr) * msgcnt));
-	prodhdr = (void *)rkbuf->rkbuf_buf;
-	msghdr = (void *)(prodhdr+1);
-
-	/* Insert first part of Produce header */
-	prodhdr->part1.RequiredAcks  = htons(rkt->rkt_conf.required_acks);
-	prodhdr->part1.Timeout       = htonl(rkt->rkt_conf.request_timeout_ms);
-	prodhdr->part1.TopicArrayCnt = htonl(1);
-	rd_kafka_buf_push(rkbuf, &prodhdr->part1, sizeof(prodhdr->part1));
-
-	/* Insert topic */
-	rd_kafka_buf_push(rkbuf, rkt->rkt_topic,
-			  RD_KAFKAP_STR_SIZE(rkt->rkt_topic));
-
-	/* Insert second part of Produce header */
-	prodhdr->part2.PartitionArrayCnt = htonl(1);
-	prodhdr->part2.Partition = htonl(rktp->rktp_partition);
-	/* Will be finalized later*/
-	prodhdr->part2.MessageSetSize = 0;
-
-	rd_kafka_buf_push(rkbuf, &prodhdr->part2, sizeof(prodhdr->part2));
-
-	iov_firstmsg = rkbuf->rkbuf_msg.msg_iovlen;
-
-	while (msgcnt > 0 &&
-	       (rkm = TAILQ_FIRST(&rktp->rktp_xmit_msgq.rkmq_msgs))) {
-
-		if (prodhdr->part2.MessageSetSize + rkm->rkm_len >
-		    rkb->rkb_rk->rk_conf.max_msg_size) {
-			rd_rkb_dbg(rkb, MSG, "PRODUCE",
-				   "No more space in current message "
-				   "(%i messages)",
-				   rkbuf->rkbuf_msgq.rkmq_msg_cnt);
-			/* Not enough remaining size. */
-			break;
+		if (iovcnt > RD_KAFKA_PAYLOAD_IOV_MAX) {
+			iovcnt = RD_KAFKA_PAYLOAD_IOV_MAX;
+			msgcnt = ((iovcnt / 4) - 3);
 		}
-		
-		rd_kafka_msgq_deq(&rktp->rktp_xmit_msgq, rkm, 1);
 
-		rd_kafka_msgq_enq(&rkbuf->rkbuf_msgq, rkm);
-
-		msgcnt--;
-
-		/* Message header */
-		msghdr->part3.Offset = 0;
-		msghdr->part3.MessageSize = 
-			(sizeof(msghdr->part3) -
-			 sizeof(msghdr->part3.Offset) -
-			 sizeof(msghdr->part3.MessageSize)) +
-			RD_KAFKAP_BYTES_SIZE(rkm->rkm_key) +
-			sizeof(msghdr->part4) +
-			rkm->rkm_len;
-		prodhdr->part2.MessageSetSize +=
-			sizeof(msghdr->part3.Offset) +
-			sizeof(msghdr->part3.MessageSize) +
-			msghdr->part3.MessageSize;
-		msghdr->part3.MessageSize =
-			htonl(msghdr->part3.MessageSize);
+		if (0)
+			rd_rkb_dbg(rkb, MSG, "PRODUCE",
+				   "Serve %i/%i messages (%i iovecs) "
+				   "for %.*s [%"PRId32"] (%"PRIu64" bytes)",
+				   msgcnt, rktp->rktp_msgq.rkmq_msg_cnt,
+				   iovcnt,
+				   RD_KAFKAP_STR_PR(rkt->rkt_topic),
+				   rktp->rktp_partition,
+				   rktp->rktp_msgq.rkmq_msg_bytes);
 
 
-		msghdr->part3.Crc = crc32(0, NULL, 0);
-		msghdr->part3.MagicByte = 0;  /* FIXME: what? */
-		msghdr->part3.Attributes = 0; /* No compression */
+		/* Allocate iovecs to hold all headers and messages,
+		 * and allocate auxilliery space for the headers. */
+		rkbuf = rd_kafka_buf_new(iovcnt,
+					 sizeof(*prodhdr) +
+					 (sizeof(*msghdr) * msgcnt));
+		prodhdr = (void *)rkbuf->rkbuf_buf;
+		msghdr = (void *)(prodhdr+1);
 
-		msghdr->part3.Crc =
-			crc32(msghdr->part3.Crc,
-					(void *)
-					&msghdr->part3.MagicByte,
-					sizeof(msghdr->part3.
-					       MagicByte) +
-					sizeof(msghdr->part3.
-					       Attributes));
+		/* Insert first part of Produce header */
+		prodhdr->part1.RequiredAcks  = htons(rkt->rkt_conf.required_acks);
+		prodhdr->part1.Timeout       = htonl(rkt->rkt_conf.request_timeout_ms);
+		prodhdr->part1.TopicArrayCnt = htonl(1);
+		rd_kafka_buf_push(rkbuf, &prodhdr->part1, sizeof(prodhdr->part1));
 
-		/* Message header */
-		rd_kafka_buf_push(rkbuf, &msghdr->part3, sizeof(msghdr->part3));
+		/* Insert topic */
+		rd_kafka_buf_push(rkbuf, rkt->rkt_topic,
+				  RD_KAFKAP_STR_SIZE(rkt->rkt_topic));
 
+		/* Insert second part of Produce header */
+		prodhdr->part2.PartitionArrayCnt = htonl(1);
+		prodhdr->part2.Partition = htonl(rktp->rktp_partition);
+		/* Will be finalized later*/
+		prodhdr->part2.MessageSetSize = 0;
 
-		/* Key */
-		msghdr->part3.Crc =
-			crc32(msghdr->part3.Crc,
-					(void *)rkm->rkm_key,
-					RD_KAFKAP_BYTES_SIZE(rkm->
-							     rkm_key));
+		rd_kafka_buf_push(rkbuf, &prodhdr->part2, sizeof(prodhdr->part2));
 
-		rd_kafka_buf_push(rkbuf, rkm->rkm_key,
-				  RD_KAFKAP_BYTES_SIZE(rkm->rkm_key));
+		iov_firstmsg = rkbuf->rkbuf_msg.msg_iovlen;
 
+		while (msgcnt > 0 &&
+		       (rkm = TAILQ_FIRST(&rktp->rktp_xmit_msgq.rkmq_msgs))) {
 
-		/* Value(payload) length */
-		msghdr->part4.Value_len = htonl(rkm->rkm_payload ?
-                                                rkm->rkm_len :
-                                                RD_KAFKAP_BYTES_LEN_NULL);
-		msghdr->part3.Crc =
-			crc32(msghdr->part3.Crc,
-					(void *)
-					&msghdr->part4.Value_len,
-					sizeof(msghdr->part4.
-					       Value_len));
-
-		rd_kafka_buf_push(rkbuf, &msghdr->part4, sizeof(msghdr->part4));
-
-		/* Payload */
-                if (rkm->rkm_payload) {
-                        msghdr->part3.Crc =
-                                crc32(msghdr->part3.Crc,
-                                      rkm->rkm_payload,
-                                      rkm->rkm_len);
-                        rd_kafka_buf_push(rkbuf, rkm->rkm_payload,
-                                          rkm->rkm_len);
-                }
-
-
-		/* Finalize Crc */
-		msghdr->part3.Crc =
-			htonl(msghdr->part3.Crc);
-		msghdr++;
-	}
-
-	/* No messages added, bail out early. */
-	if (unlikely(rkbuf->rkbuf_msgq.rkmq_msg_cnt == 0)) {
-		rd_kafka_buf_destroy(rkbuf);
-		return -1;
-	}
-
-	/* Compress the messages */
-	if (rkb->rkb_rk->rk_conf.compression_codec) {
-		int    siovlen = 1;
-		size_t coutlen;
-		int r;
-		struct {
-			int64_t Offset;
-			int32_t MessageSize;
-			int32_t Crc;
-			int8_t  MagicByte;
-			int8_t  Attributes;
-			int32_t Key_len; /* -1 */
-			int32_t Value_len;
-		} RD_PACKED *msghdr2 = NULL;
-		int32_t ctotlen;
-		struct snappy_env senv;
-		struct iovec siov;
-		z_stream strm;
-		int i;
-
-		switch (rkb->rkb_rk->rk_conf.compression_codec) {
-		case RD_KAFKA_COMPRESSION_NONE:
-			abort(); /* unreachable */
-			break;
-
-		case RD_KAFKA_COMPRESSION_GZIP:
-			/* Initialize gzip compression */
-			memset(&strm, 0, sizeof(strm));
-			r = deflateInit2(&strm, Z_DEFAULT_COMPRESSION,
-					 Z_DEFLATED, 15+16,
-					 8, Z_DEFAULT_STRATEGY);
-			if (r != Z_OK) {
-				rd_rkb_log(rkb, LOG_ERR, "GZIP",
-					   "Failed to initialize gzip for "
-					   "compressing %"PRId32" bytes in "
-					   "topic %.*s [%"PRId32"]: %s (%i): "
-					   "sending uncompressed",
-					   prodhdr->part2.MessageSetSize,
-					   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
-							    rkt_topic),
-					   rktp->rktp_partition,
-					   strm.msg ? : "", r);
-				goto do_send;
+			if (prodhdr->part2.MessageSetSize + rkm->rkm_len >
+			    rkb->rkb_rk->rk_conf.max_msg_size) {
+				rd_rkb_dbg(rkb, MSG, "PRODUCE",
+					   "No more space in current message "
+					   "(%i messages)",
+					   rkbuf->rkbuf_msgq.rkmq_msg_cnt);
+				/* Not enough remaining size. */
+				break;
 			}
 
-			/* Calculate maximum compressed size and
-			 * allocate an output buffer accordingly, being
-			 * prefixed with the Message header. */
-			siov.iov_len = deflateBound(&strm,
-						    prodhdr->part2.
-						    MessageSetSize);
-			msghdr2 = malloc(sizeof(*msghdr2) + siov.iov_len);
-			siov.iov_base = (void *)(msghdr2+1);
+			rd_kafka_msgq_deq(&rktp->rktp_xmit_msgq, rkm, 1);
 
-			strm.next_out = (void *)siov.iov_base;
-			strm.avail_out = siov.iov_len;
+			rd_kafka_msgq_enq(&rkbuf->rkbuf_msgq, rkm);
 
-			/* Iterate through each message and compress it. */
-			for (i = iov_firstmsg ;
-			     i < rkbuf->rkbuf_msg.msg_iovlen ; i++) {
+			msgcnt--;
 
-				if (rkbuf->rkbuf_msg.msg_iov[i].iov_len == 0)
-					continue;
+			/* Message header */
+			msghdr->part3.Offset = 0;
+			msghdr->part3.MessageSize = 
+				(sizeof(msghdr->part3) -
+				 sizeof(msghdr->part3.Offset) -
+				 sizeof(msghdr->part3.MessageSize)) +
+				RD_KAFKAP_BYTES_SIZE(rkm->rkm_key) +
+				sizeof(msghdr->part4) +
+				rkm->rkm_len;
+			prodhdr->part2.MessageSetSize +=
+				sizeof(msghdr->part3.Offset) +
+				sizeof(msghdr->part3.MessageSize) +
+				msghdr->part3.MessageSize;
+			msghdr->part3.MessageSize =
+				htonl(msghdr->part3.MessageSize);
 
-				strm.next_in = (void *)rkbuf->rkbuf_msg.
-					msg_iov[i].iov_base;
-				strm.avail_in = rkbuf->rkbuf_msg.
-					msg_iov[i].iov_len;
 
-				/* Compress message */
-				if ((r = deflate(&strm, Z_NO_FLUSH) != Z_OK)) {
+			msghdr->part3.Crc = crc32(0, NULL, 0);
+			msghdr->part3.MagicByte = 0;  /* FIXME: what? */
+			msghdr->part3.Attributes = 0; /* No compression */
+
+			msghdr->part3.Crc =
+				crc32(msghdr->part3.Crc,
+						(void *)
+						&msghdr->part3.MagicByte,
+						sizeof(msghdr->part3.
+						       MagicByte) +
+						sizeof(msghdr->part3.
+						       Attributes));
+
+			/* Message header */
+			rd_kafka_buf_push(rkbuf, &msghdr->part3, sizeof(msghdr->part3));
+
+
+			/* Key */
+			msghdr->part3.Crc =
+				crc32(msghdr->part3.Crc,
+						(void *)rkm->rkm_key,
+						RD_KAFKAP_BYTES_SIZE(rkm->
+								     rkm_key));
+
+			rd_kafka_buf_push(rkbuf, rkm->rkm_key,
+					  RD_KAFKAP_BYTES_SIZE(rkm->rkm_key));
+
+
+			/* Value(payload) length */
+			msghdr->part4.Value_len = htonl(rkm->rkm_payload ?
+							rkm->rkm_len :
+							RD_KAFKAP_BYTES_LEN_NULL);
+			msghdr->part3.Crc =
+				crc32(msghdr->part3.Crc,
+						(void *)
+						&msghdr->part4.Value_len,
+						sizeof(msghdr->part4.
+						       Value_len));
+
+			rd_kafka_buf_push(rkbuf, &msghdr->part4, sizeof(msghdr->part4));
+
+			/* Payload */
+			if (rkm->rkm_payload) {
+				msghdr->part3.Crc =
+					crc32(msghdr->part3.Crc,
+					      rkm->rkm_payload,
+					      rkm->rkm_len);
+				rd_kafka_buf_push(rkbuf, rkm->rkm_payload,
+						  rkm->rkm_len);
+			}
+
+
+			/* Finalize Crc */
+			msghdr->part3.Crc =
+				htonl(msghdr->part3.Crc);
+			msghdr++;
+		}
+
+		/* No messages added, bail out early. */
+		if (unlikely(rkbuf->rkbuf_msgq.rkmq_msg_cnt == 0)) {
+			rd_kafka_buf_destroy(rkbuf);
+			return -1;
+		}
+
+		/* Compress the messages */
+		if (rkb->rkb_rk->rk_conf.compression_codec) {
+			int    siovlen = 1;
+			size_t coutlen;
+			int r;
+			struct {
+				int64_t Offset;
+				int32_t MessageSize;
+				int32_t Crc;
+				int8_t  MagicByte;
+				int8_t  Attributes;
+				int32_t Key_len; /* -1 */
+				int32_t Value_len;
+			} RD_PACKED *msghdr2 = NULL;
+			int32_t ctotlen;
+			struct snappy_env senv;
+			struct iovec siov;
+			z_stream strm;
+			int i;
+
+			switch (rkb->rkb_rk->rk_conf.compression_codec) {
+			case RD_KAFKA_COMPRESSION_NONE:
+				abort(); /* unreachable */
+				break;
+
+			case RD_KAFKA_COMPRESSION_GZIP:
+				/* Initialize gzip compression */
+				memset(&strm, 0, sizeof(strm));
+				r = deflateInit2(&strm, Z_DEFAULT_COMPRESSION,
+						 Z_DEFLATED, 15+16,
+						 8, Z_DEFAULT_STRATEGY);
+				if (r != Z_OK) {
 					rd_rkb_log(rkb, LOG_ERR, "GZIP",
-						   "Failed to gzip-compress "
-						   "%zd bytes for "
+						   "Failed to initialize gzip for "
+						   "compressing %"PRId32" bytes in "
+						   "topic %.*s [%"PRId32"]: %s (%i): "
+						   "sending uncompressed",
+						   prodhdr->part2.MessageSetSize,
+						   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
+								    rkt_topic),
+						   rktp->rktp_partition,
+						   strm.msg ? : "", r);
+					goto do_send;
+				}
+
+				/* Calculate maximum compressed size and
+				 * allocate an output buffer accordingly, being
+				 * prefixed with the Message header. */
+				siov.iov_len = deflateBound(&strm,
+							    prodhdr->part2.
+							    MessageSetSize);
+				msghdr2 = malloc(sizeof(*msghdr2) + siov.iov_len);
+				siov.iov_base = (void *)(msghdr2+1);
+
+				strm.next_out = (void *)siov.iov_base;
+				strm.avail_out = siov.iov_len;
+
+				/* Iterate through each message and compress it. */
+				for (i = iov_firstmsg ;
+				     i < rkbuf->rkbuf_msg.msg_iovlen ; i++) {
+
+					if (rkbuf->rkbuf_msg.msg_iov[i].iov_len == 0)
+						continue;
+
+					strm.next_in = (void *)rkbuf->rkbuf_msg.
+						msg_iov[i].iov_base;
+					strm.avail_in = rkbuf->rkbuf_msg.
+						msg_iov[i].iov_len;
+
+					/* Compress message */
+					if ((r = deflate(&strm, Z_NO_FLUSH) != Z_OK)) {
+						rd_rkb_log(rkb, LOG_ERR, "GZIP",
+							   "Failed to gzip-compress "
+							   "%zd bytes for "
+							   "topic %.*s [%"PRId32"]: "
+							   "%s (%i): "
+							   "sending uncompressed",
+							   rkbuf->rkbuf_msg.msg_iov[i].
+							   iov_len,
+							   RD_KAFKAP_STR_PR(rktp->
+									    rktp_rkt->
+									    rkt_topic),
+							   rktp->rktp_partition,
+							   strm.msg ? : "", r);
+						deflateEnd(&strm);
+						free(msghdr2);
+						goto do_send;
+					}
+
+					rd_kafka_assert(rkb->rkb_rk,
+							strm.avail_in == 0);
+				}
+
+				/* Finish the compression */
+				if ((r = deflate(&strm, Z_FINISH)) != Z_STREAM_END) {
+					rd_rkb_log(rkb, LOG_ERR, "GZIP",
+						   "Failed to finish gzip compression "
+						   " of %"PRId32" bytes for "
 						   "topic %.*s [%"PRId32"]: "
 						   "%s (%i): "
 						   "sending uncompressed",
-						   rkbuf->rkbuf_msg.msg_iov[i].
-						   iov_len,
-						   RD_KAFKAP_STR_PR(rktp->
-								    rktp_rkt->
+						   prodhdr->part2.MessageSetSize,
+						   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
 								    rkt_topic),
 						   rktp->rktp_partition,
 						   strm.msg ? : "", r);
@@ -2251,144 +2278,122 @@ static int rd_kafka_broker_produce_toppar (rd_kafka_broker_t *rkb,
 					goto do_send;
 				}
 
-				rd_kafka_assert(rkb->rkb_rk,
-                                                strm.avail_in == 0);
-			}
+				coutlen = strm.total_out;
 
-			/* Finish the compression */
-			if ((r = deflate(&strm, Z_FINISH)) != Z_STREAM_END) {
-				rd_rkb_log(rkb, LOG_ERR, "GZIP",
-					   "Failed to finish gzip compression "
-					   " of %"PRId32" bytes for "
-					   "topic %.*s [%"PRId32"]: "
-					   "%s (%i): "
-					   "sending uncompressed",
-					   prodhdr->part2.MessageSetSize,
-					   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
-							    rkt_topic),
-					   rktp->rktp_partition,
-					   strm.msg ? : "", r);
+				/* Deinitialize compression */
 				deflateEnd(&strm);
-				free(msghdr2);
-				goto do_send;
+				break;
+
+
+			case RD_KAFKA_COMPRESSION_SNAPPY:
+				/* Initialize snappy compression environment */
+				snappy_init_env_sg(&senv, 1/*iov enable*/);
+
+				/* Calculate maximum compressed size and
+				 * allocate an output buffer accordingly, being
+				 * prefixed with the Message header. */
+				siov.iov_len =
+					snappy_max_compressed_length(prodhdr->part2.
+								     MessageSetSize);
+				msghdr2 = malloc(sizeof(*msghdr2) + siov.iov_len);
+				siov.iov_base = (void *)(msghdr2+1);
+
+				/* Compress each message */
+				if ((r = snappy_compress_iov(&senv,
+							     &rkbuf->
+							     rkbuf_iov[iov_firstmsg],
+							     rkbuf->rkbuf_msg.
+							     msg_iovlen -
+							     iov_firstmsg,
+							     prodhdr->part2.
+							     MessageSetSize,
+							     &siov, &siovlen,
+							     &coutlen)) != 0) {
+					rd_rkb_log(rkb, LOG_ERR, "SNAPPY",
+						   "Failed to snappy-compress "
+						   "%"PRId32" bytes for "
+						   "topic %.*s [%"PRId32"]: %s: "
+						   "sending uncompressed",
+						   prodhdr->part2.MessageSetSize,
+						   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
+								    rkt_topic),
+						   rktp->rktp_partition,
+						   strerror(-r));
+					free(msghdr2);
+					goto do_send;
+				}
+
+				/* Free snappy environment */
+				snappy_free_env(&senv);
+				break;
+
+			default:
+				rd_kafka_assert(rkb->rkb_rk, !*"notreached: compression.codec");
+				break;
+
 			}
 
-			coutlen = strm.total_out;
+			/* Create a new Message who's Value is the compressed data */
+			ctotlen = sizeof(*msghdr2) + coutlen;
+			msghdr2->Offset      = 0;
+			msghdr2->MessageSize = htonl(4+1+1+4+4 + coutlen);
+			msghdr2->MagicByte   = 0;
+			msghdr2->Attributes  = rkb->rkb_rk->rk_conf.
+				compression_codec & 0x7;
+			msghdr2->Key_len = htonl(-1);
+			msghdr2->Value_len = htonl(coutlen);
+			msghdr2->Crc = crc32(0, NULL, 0);
+			msghdr2->Crc = crc32(msghdr2->Crc,
+						       (void *)&msghdr2->MagicByte,
+						       1+1+4+4);
+			msghdr2->Crc = crc32(msghdr2->Crc, (void *)siov.iov_base, coutlen);
+			msghdr2->Crc = htonl(msghdr2->Crc);
 
-			/* Deinitialize compression */
-			deflateEnd(&strm);
-			break;
+			/* Update enveloping MessageSet's length. */
+			prodhdr->part2.MessageSetSize = ctotlen;
 
+			/* Rewind rkbuf to the pre-message checkpoint.
+			 * This replaces all the original Messages with just the
+			 * Message containing the compressed payload. */
+			rd_kafka_buf_rewind(rkbuf, iov_firstmsg);
 
-		case RD_KAFKA_COMPRESSION_SNAPPY:
-			/* Initialize snappy compression environment */
-			snappy_init_env_sg(&senv, 1/*iov enable*/);
+			/* Add allocated buffer as auxbuf to rkbuf so that
+			 * it will get freed with the rkbuf */
+			rd_kafka_buf_auxbuf_add(rkbuf, msghdr2);
 
-			/* Calculate maximum compressed size and
-			 * allocate an output buffer accordingly, being
-			 * prefixed with the Message header. */
-			siov.iov_len =
-				snappy_max_compressed_length(prodhdr->part2.
-							     MessageSetSize);
-			msghdr2 = malloc(sizeof(*msghdr2) + siov.iov_len);
-			siov.iov_base = (void *)(msghdr2+1);
-
-			/* Compress each message */
-			if ((r = snappy_compress_iov(&senv,
-						     &rkbuf->
-						     rkbuf_iov[iov_firstmsg],
-						     rkbuf->rkbuf_msg.
-						     msg_iovlen -
-						     iov_firstmsg,
-						     prodhdr->part2.
-						     MessageSetSize,
-						     &siov, &siovlen,
-						     &coutlen)) != 0) {
-				rd_rkb_log(rkb, LOG_ERR, "SNAPPY",
-					   "Failed to snappy-compress "
-					   "%"PRId32" bytes for "
-					   "topic %.*s [%"PRId32"]: %s: "
-					   "sending uncompressed",
-					   prodhdr->part2.MessageSetSize,
-					   RD_KAFKAP_STR_PR(rktp->rktp_rkt->
-							    rkt_topic),
-					   rktp->rktp_partition,
-					   strerror(-r));
-				free(msghdr2);
-				goto do_send;
-			}
-
-			/* Free snappy environment */
-			snappy_free_env(&senv);
-			break;
-
-		default:
-			rd_kafka_assert(rkb->rkb_rk, !*"notreached: compression.codec");
-			break;
-
+			/* Push the new Message onto the buffer stack. */
+			rd_kafka_buf_push(rkbuf, msghdr2, ctotlen);
 		}
 
-		/* Create a new Message who's Value is the compressed data */
-		ctotlen = sizeof(*msghdr2) + coutlen;
-		msghdr2->Offset      = 0;
-		msghdr2->MessageSize = htonl(4+1+1+4+4 + coutlen);
-		msghdr2->MagicByte   = 0;
-		msghdr2->Attributes  = rkb->rkb_rk->rk_conf.
-			compression_codec & 0x7;
-		msghdr2->Key_len = htonl(-1);
-		msghdr2->Value_len = htonl(coutlen);
-		msghdr2->Crc = crc32(0, NULL, 0);
-		msghdr2->Crc = crc32(msghdr2->Crc,
-					       (void *)&msghdr2->MagicByte,
-					       1+1+4+4);
-		msghdr2->Crc = crc32(msghdr2->Crc, (void *)siov.iov_base, coutlen);
-		msghdr2->Crc = htonl(msghdr2->Crc);
+	do_send:
 
-		/* Update enveloping MessageSet's length. */
-		prodhdr->part2.MessageSetSize = ctotlen;
+		(void)rd_atomic_add(&rktp->rktp_c.tx_msgs,
+				    rkbuf->rkbuf_msgq.rkmq_msg_cnt);
+		(void)rd_atomic_add(&rktp->rktp_c.tx_bytes,
+				    prodhdr->part2.MessageSetSize);
 
-		/* Rewind rkbuf to the pre-message checkpoint.
-		 * This replaces all the original Messages with just the
-		 * Message containing the compressed payload. */
-		rd_kafka_buf_rewind(rkbuf, iov_firstmsg);
+		prodhdr->part2.MessageSetSize =
+			htonl(prodhdr->part2.MessageSetSize);
 
-		/* Add allocated buffer as auxbuf to rkbuf so that
-		 * it will get freed with the rkbuf */
-		rd_kafka_buf_auxbuf_add(rkbuf, msghdr2);
+		rd_rkb_dbg(rkb, MSG, "PRODUCE",
+			   "produce messageset with %i messages "
+			   "(%"PRId32" bytes)",
+			   rkbuf->rkbuf_msgq.rkmq_msg_cnt,
+			   ntohl(prodhdr->part2.MessageSetSize));
 
-		/* Push the new Message onto the buffer stack. */
-		rd_kafka_buf_push(rkbuf, msghdr2, ctotlen);
+		cnt += rkbuf->rkbuf_msgq.rkmq_msg_cnt;
+
+		if (!rkt->rkt_conf.required_acks)
+			rkbuf->rkbuf_flags |= RD_KAFKA_OP_F_NO_RESPONSE;
+
+		/* Use timeout from first message. */
+		rkbuf->rkbuf_ts_timeout =
+			TAILQ_FIRST(&rkbuf->rkbuf_msgq.rkmq_msgs)->rkm_ts_timeout;
+
+		rd_kafka_toppar_keep(rktp); /* refcount for msgset_reply() */
+		rd_kafka_broker_buf_enq1(rkb, RD_KAFKAP_Produce, rkbuf,
+					 rd_kafka_produce_msgset_reply, rktp);
 	}
-
-do_send:
-
-	(void)rd_atomic_add(&rktp->rktp_c.tx_msgs,
-			    rkbuf->rkbuf_msgq.rkmq_msg_cnt);
-	(void)rd_atomic_add(&rktp->rktp_c.tx_bytes,
-			    prodhdr->part2.MessageSetSize);
-
-	prodhdr->part2.MessageSetSize =
-		htonl(prodhdr->part2.MessageSetSize);
-
-	rd_rkb_dbg(rkb, MSG, "PRODUCE",
-		   "produce messageset with %i messages "
-		   "(%"PRId32" bytes)",
-		   rkbuf->rkbuf_msgq.rkmq_msg_cnt,
-		   ntohl(prodhdr->part2.MessageSetSize));
-
-	cnt = rkbuf->rkbuf_msgq.rkmq_msg_cnt;
-
-	if (!rkt->rkt_conf.required_acks)
-		rkbuf->rkbuf_flags |= RD_KAFKA_OP_F_NO_RESPONSE;
-
-	/* Use timeout from first message. */
-	rkbuf->rkbuf_ts_timeout =
-		TAILQ_FIRST(&rkbuf->rkbuf_msgq.rkmq_msgs)->rkm_ts_timeout;
-
-	rd_kafka_toppar_keep(rktp); /* refcount for msgset_reply() */
-	rd_kafka_broker_buf_enq1(rkb, RD_KAFKAP_Produce, rkbuf,
-				 rd_kafka_produce_msgset_reply, rktp);
-
 
 	return cnt;
 }
