@@ -1373,7 +1373,7 @@ int rd_kafka_produce (rd_kafka_topic_t *rkt, int32_t partition,
 
 
 static int rd_kafka_consume_start0 (rd_kafka_topic_t *rkt, int32_t partition,
-				    int64_t offset, rd_kafka_q_t *rkqu_q) {
+				    int64_t offset, rd_kafka_q_t *rkq) {
 	rd_kafka_toppar_t *rktp;
 
 	if (partition < 0) {
