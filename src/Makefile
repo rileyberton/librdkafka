@@ -8,7 +8,7 @@ SRCS=		rdkafka.c rdkafka_broker.c rdkafka_msg.c rdkafka_topic.c \
 		rdcrc32.c rdgz.c rdaddr.c rdrand.c rdthread.c rdqueue.c \
 		rdlog.c \
 		snappy.c \
-		an_md.c \
+		rd_rdtsc.c \
 		x86_64/x86_64.c \
 		x86_64/cpuid.c
 

@@ -506,7 +506,7 @@ static void rd_kafka_broker_waitresp_timeout_scan (rd_kafka_broker_t *rkb,
 
 static ssize_t rd_kafka_broker_send (rd_kafka_broker_t *rkb,
 				     const struct msghdr *msg) {
-	ssize_t r;
+	ssize_t r = 0;
 
 	rd_kafka_assert(rkb->rkb_rk, rkb->rkb_state>=RD_KAFKA_BROKER_STATE_UP);
 	rd_kafka_assert(rkb->rkb_rk, rkb->rkb_s != -1);
@@ -2449,6 +2449,8 @@ static void rd_kafka_broker_io_serve (rd_kafka_broker_t *rkb) {
 	else
 		rkb->rkb_pfd.events &= ~POLLOUT;
 
+	rkb->rkb_pfd.events |= POLLIN | POLLHUP;
+	
 	if (poll(&rkb->rkb_pfd, 1,
 		 rkb->rkb_rk->rk_conf.buffering_max_ms) <= 0)
 		return;
@@ -2464,6 +2466,9 @@ static void rd_kafka_broker_io_serve (rd_kafka_broker_t *rkb) {
 	if (rkb->rkb_pfd.revents & POLLOUT)
 		while (rd_kafka_send(rkb) > 0)
 			;
+	else {
+		rkb->rkb_c.pollout_failures++;
+	}
 }
 
 

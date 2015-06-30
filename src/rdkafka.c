@@ -36,7 +36,7 @@
 #include <signal.h>
 #include <stdlib.h>
 
-#include "an_md.h"
+#include "rd_rdtsc.h"
 
 #include "rdkafka_int.h"
 #include "rdkafka_msg.h"
@@ -1041,6 +1041,7 @@ static void rd_kafka_stats_emit_all (rd_kafka_t *rk) {
 			   "\"txbytes\":%"PRIu64", "
 			   "\"txerrs\":%"PRIu64", "
 			   "\"txretries\":%"PRIu64", "
+			   "\"pollout_fails\":%"PRIu64", "
 			   "\"req_timeouts\":%"PRIu64", "
 			   "\"rx\":%"PRIu64", "
 			   "\"rxbytes\":%"PRIu64", "
@@ -1069,6 +1070,7 @@ static void rd_kafka_stats_emit_all (rd_kafka_t *rk) {
 			   rkb->rkb_c.tx_bytes,
 			   rkb->rkb_c.tx_err,
 			   rkb->rkb_c.tx_retries,
+			   rkb->rkb_c.pollout_failures,
                            rkb->rkb_c.req_timeouts,
 			   rkb->rkb_c.rx,
 			   rkb->rkb_c.rx_bytes,
@@ -1146,7 +1148,9 @@ static void rd_kafka_stats_emit_all (rd_kafka_t *rk) {
 	rd_kafka_op_reply(rk, RD_KAFKA_OP_STATS, 0, buf, of);
 }
 
-
+static void rd_kafka_clock_calibrate_cb (rd_kafka_t *rk, void *arg) {
+	rd_rdtsc_calibrate();
+}
 
 static void rd_kafka_topic_scan_tmr_cb (rd_kafka_t *rk, void *arg) {
 	rd_kafka_topic_scan_all(rk, rd_clock());
@@ -1182,12 +1186,15 @@ static void rd_kafka_metadata_refresh_cb (rd_kafka_t *rk, void *arg) {
  */
 static void *rd_kafka_thread_main (void *arg) {
 	rd_kafka_t *rk = arg;
+	rd_kafka_timer_t tmr_clock_calibrate = {};
 	rd_kafka_timer_t tmr_topic_scan = {};
 	rd_kafka_timer_t tmr_stats_emit = {};
 	rd_kafka_timer_t tmr_metadata_refresh = {};
 
 	(void)rd_atomic_add(&rd_kafka_thread_cnt_curr, 1);
 
+	rd_kafka_timer_start(rk, &tmr_clock_calibrate, 100000000,
+			     rd_kafka_clock_calibrate_cb, NULL);
 	rd_kafka_timer_start(rk, &tmr_topic_scan, 1000000,
 			     rd_kafka_topic_scan_tmr_cb, NULL);
 	rd_kafka_timer_start(rk, &tmr_stats_emit,
@@ -1216,7 +1223,7 @@ static void rd_kafka_term_sig_handler (int sig) {
 }
 
 static void rd_kafka_global_init (void) {
-	an_md_probe();
+	rd_rdtsc_probe();
 }
 
 rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *conf,
@@ -1366,7 +1373,7 @@ int rd_kafka_produce (rd_kafka_topic_t *rkt, int32_t partition,
 
 
 static int rd_kafka_consume_start0 (rd_kafka_topic_t *rkt, int32_t partition,
-				    int64_t offset, rd_kafka_q_t *rkq) {
+				    int64_t offset, rd_kafka_q_t *rkqu_q) {
 	rd_kafka_toppar_t *rktp;
 
 	if (partition < 0) {

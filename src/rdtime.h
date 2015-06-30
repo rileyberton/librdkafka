@@ -28,7 +28,7 @@
 
 #pragma once
 
-#include "an_md.h"
+#include "rd_rdtsc.h"
 
 #ifndef TIMEVAL_TO_TIMESPEC
 #define TIMEVAL_TO_TIMESPEC(tv,ts) do {		\
@@ -56,6 +56,7 @@
 
 #define TIMESPEC_CLEAR(ts) ((ts)->tv_sec = (ts)->tv_nsec = 0LLU)
 
+#define TICKS_PER_CALIBRATION 100000000
 
 static inline rd_ts_t rd_clock (void) RD_UNUSED;
 static inline rd_ts_t rd_clock (void) {
@@ -65,21 +66,8 @@ static inline rd_ts_t rd_clock (void) {
 	gettimeofday(&tv, NULL);
 	return ((rd_ts_t)tv.tv_sec * 1000000LLU) + (rd_ts_t)tv.tv_usec;
 #else
-
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return ((rd_ts_t)ts.tv_sec * 1000000LLU) +
-		((rd_ts_t)ts.tv_nsec / 1000LLU);
-#if 0	
-	static uint64_t ticks = 0;
-
-	uint64_t now = an_md_rdtsc();
-	if (unlikely(ticks == 0) || now - ticks > 100000000) {
-
-		ticks = now;
-	}
-	return an_md_rdtsc_to_us(now);
-#endif	
+	uint64_t now = rd_rdtsc();
+	return rd_rdtsc_to_us(now);
 #endif
 }
 
