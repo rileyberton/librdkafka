@@ -1042,6 +1042,8 @@ static void rd_kafka_stats_emit_all (rd_kafka_t *rk) {
 			   "\"txerrs\":%"PRIu64", "
 			   "\"txretries\":%"PRIu64", "
 			   "\"pollout_fails\":%"PRIu64", "
+			   "\"poll_time_us\":%"PRIu64", "
+			   "\"poll_error_cnt\":%"PRIu64", "
 			   "\"req_timeouts\":%"PRIu64", "
 			   "\"rx\":%"PRIu64", "
 			   "\"rxbytes\":%"PRIu64", "
@@ -1071,6 +1073,8 @@ static void rd_kafka_stats_emit_all (rd_kafka_t *rk) {
 			   rkb->rkb_c.tx_err,
 			   rkb->rkb_c.tx_retries,
 			   rkb->rkb_c.pollout_failures,
+			   rkb->rkb_c.poll_time_us,
+   			   rkb->rkb_c.poll_error_count,
                            rkb->rkb_c.req_timeouts,
 			   rkb->rkb_c.rx,
 			   rkb->rkb_c.rx_bytes,

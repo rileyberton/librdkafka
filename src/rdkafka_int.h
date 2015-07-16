@@ -564,6 +564,8 @@ typedef struct rd_kafka_broker_s {
 		uint64_t tx_retries;
                 uint64_t req_timeouts;  /* Accumulated value */
 		uint64_t pollout_failures;
+		uint64_t poll_error_count;
+		uint64_t poll_time_us;
 
 		uint64_t rx_bytes;
 		uint64_t rx;    /* Kafka messages (not payload msgs) */

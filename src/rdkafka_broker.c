@@ -1527,7 +1527,17 @@ err:
 int rd_kafka_socket_cb_linux (int domain, int type, int protocol,
                               void *opaque) {
 #ifdef SOCK_CLOEXEC
-        return socket(domain, type | SOCK_CLOEXEC, protocol);
+	int on = 1;
+        int s = socket(domain, type | SOCK_CLOEXEC, protocol);
+
+	/* turn off Nagle's */
+	/* (void)setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (void *)&on, sizeof(on)); */
+	
+	/* int flags = fcntl(s, F_GETFL, 0); */
+	/* if (flags < 0) return s; */
+	/* flags |= O_NONBLOCK; */
+	/* fnctl(s, F_SETFL, flags); */
+	return s;	
 #else
         return rd_kafka_socket_cb_generic(domain, type, protocol, opaque);
 #endif
@@ -2012,9 +2022,8 @@ static int rd_kafka_broker_produce_toppar (rd_kafka_broker_t *rkb,
 	 */
 
 	rd_ts_t start = rd_clock();
-	
-	while (rktp->rktp_xmit_msgq.rkmq_msg_cnt > 0
-	       && rd_clock() - start < ((rkb->rkb_rk->rk_conf.buffering_max_ms * 1000) - 500)) // leave half an ms
+
+	if (likely(rktp->rktp_xmit_msgq.rkmq_msg_cnt > 0))
 	{
 		rd_kafka_assert(rkb->rkb_rk,
                                 TAILQ_FIRST(&rktp->rktp_xmit_msgq.rkmq_msgs));
@@ -2449,12 +2458,19 @@ static void rd_kafka_broker_io_serve (rd_kafka_broker_t *rkb) {
 	else
 		rkb->rkb_pfd.events &= ~POLLOUT;
 
-	rkb->rkb_pfd.events |= POLLIN | POLLHUP;
+	/* we always care about POLLIN */
+	rkb->rkb_pfd.events |= POLLIN;
 	
+	rd_ts_t poll_start = rd_clock();
 	if (poll(&rkb->rkb_pfd, 1,
-		 rkb->rkb_rk->rk_conf.buffering_max_ms) <= 0)
+		 rkb->rkb_rk->rk_conf.buffering_max_ms) <= 0) {
+		rkb->rkb_c.poll_error_count++;
 		return;
+	}
+	rd_ts_t poll_end = rd_clock();
 
+	rkb->rkb_c.poll_time_us += poll_end - poll_start;
+	
 	if (rkb->rkb_pfd.revents & POLLIN)
 		while (rd_kafka_recv(rkb) > 0)
 			;
