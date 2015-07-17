@@ -36,9 +36,9 @@ unsigned long long rd_us_to_rdtsc(unsigned long long);
 
 /**
  * Returns number of microseconds in a tick interval.
- * Provides nanosecond granularity.
+ * Provides microsecond granularity;
  */
-double rd_rdtsc_scale(uint64_t);
+uint64_t rd_rdtsc_scale(uint64_t);
 
 /**
  * Returns number of microseconds in a tick interval

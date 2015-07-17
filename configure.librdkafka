@@ -24,6 +24,7 @@ function checks {
     mkl_lib_check "libpthread" "" fail CC "-lpthread"
     mkl_lib_check "zlib" "" fail CC "-lz"
     mkl_lib_check "ck" "" fail CC "$(pkg-config --libs ck)"
+    mkl_lib_check "snappy" "" fail CC "-lsnappy"
 
     # -lrt is needed on linux for clock_gettime: link it if it exists.
     mkl_lib_check "librt" "" cont CC "-lrt"

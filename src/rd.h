@@ -95,7 +95,12 @@
 
 #define rd_atomic_add_prev(PTR,VAL)  ATOMIC_OP(fetch,add,PTR,VAL)
 #define rd_atomic_sub_prev(PTR,VAL)  ATOMIC_OP(fetch,sub,PTR,VAL)
-
+#define rd_atomic_swap(PTR,T,OLDVAL,NEWVAL)	\
+	T x; \
+	do { \
+		x = *(PTR);	\
+		if (x >= NEWVAL) break; \
+	} while(__sync_bool_compare_and_swap((PTR), x, NEWVAL) == false);
 
 
 #ifdef sun

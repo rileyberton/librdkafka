@@ -66,8 +66,15 @@ static inline rd_ts_t rd_clock (void) {
 	gettimeofday(&tv, NULL);
 	return ((rd_ts_t)tv.tv_sec * 1000000LLU) + (rd_ts_t)tv.tv_usec;
 #else
+#if 0	
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ((rd_ts_t)ts.tv_sec * 1000000LLU) +
+               ((rd_ts_t)ts.tv_nsec / 1000LLU);
+#else	
 	uint64_t now = rd_rdtsc();
 	return rd_rdtsc_to_us(now);
+#endif 	
 #endif
 }
 

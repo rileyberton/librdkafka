@@ -20,6 +20,7 @@
 #include <stdio.h>
 
 #include "rd_rdtsc.h"
+#include "rd.h"
 
 #ifndef RD_CALIBRATE_FREQUENCY
 #define RD_CALIBRATE_FREQUENCY 300
@@ -43,7 +44,7 @@ static struct rd_table table[] = {
 	}
 };
 
-static double rdtsc_scale;
+static uint64_t rdtsc_scale;
 
 #define MIN_GETTIME_SAMPLES   50
 #define MAX_GETTIME_SAMPLES   100000
@@ -57,25 +58,23 @@ static double rdtsc_scale;
 
 #define max(A,B) (A<B?B:A)
 
-double
+inline uint64_t
 rd_rdtsc_scale(uint64_t ticks)
 {
-
-	return (double)ticks / rdtsc_scale;
+	return ticks / rdtsc_scale;
 }
 
-unsigned long long
+inline unsigned long long
 rd_us_to_rdtsc(unsigned long long us)
 {
-
 	return us * rdtsc_scale;
 }
 
-unsigned long long
+inline unsigned long long
 rd_rdtsc_to_us(uint64_t ticks)
 {
-
-	return (unsigned long long)llround(rd_rdtsc_scale(ticks));
+	/* the atomic swap below for rdtsc_scale ensures we always go forward. */
+	return rd_rdtsc_scale(ticks);
 }
 
 static bool
@@ -151,19 +150,20 @@ rd_rdtsc_calibrate_scale(rd_rdtsc_t *rdtsc)
 
 	if (rdtsc_std_err > SLEEP_STDERR_TARGET) {
 		return false;
-	} else if (rdtsc_scale != 0) {
-		double drift = rdtsc_mean - rdtsc_scale;
-
 	}
-
-	rdtsc_scale = rdtsc_mean;
+	
+	uint64_t mean = llround(rdtsc_mean);
+	rd_atomic_swap(&rdtsc_scale, uint64_t, rdtsc_scale, mean);
+	
 	if (table[RD_RDTSC].notes != NULL) {
 		free((char *)table[RD_RDTSC].notes);
 		table[RD_RDTSC].notes = NULL;
 	}
 
-	asprintf((char **)&table[RD_RDTSC].notes, "%lf ticks/us, deviation %lf, %d iterations",
-	        rdtsc_scale, rdtsc_std_err, j);
+	asprintf((char **)&table[RD_RDTSC].notes, "%llu ticks/us, deviation %lf, %d iterations",
+		 (unsigned long long)rdtsc_scale, rdtsc_std_err, j);
+
+	printf("%s\n", table[RD_RDTSC].notes);
 
 	return true; 
 }

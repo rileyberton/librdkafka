@@ -1197,7 +1197,7 @@ static void *rd_kafka_thread_main (void *arg) {
 
 	(void)rd_atomic_add(&rd_kafka_thread_cnt_curr, 1);
 
-	rd_kafka_timer_start(rk, &tmr_clock_calibrate, 100000000,
+	rd_kafka_timer_start(rk, &tmr_clock_calibrate, 10000000,
 			     rd_kafka_clock_calibrate_cb, NULL);
 	rd_kafka_timer_start(rk, &tmr_topic_scan, 1000000,
 			     rd_kafka_topic_scan_tmr_cb, NULL);
@@ -1228,6 +1228,7 @@ static void rd_kafka_term_sig_handler (int sig) {
 
 static void rd_kafka_global_init (void) {
 	rd_rdtsc_probe();
+	rd_rdtsc_calibrate();
 }
 
 rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *conf,

@@ -52,7 +52,8 @@
 #include <linux/vmalloc.h>
 #include <asm/unaligned.h>
 #else
-#include "snappy.h"
+#include <snappy-c.h>
+#include "rd_snappy.h"
 #include "snappy_compat.h"
 #endif
 
@@ -641,7 +642,7 @@ static inline char *emit_copy(char *op, int offset, int len)
  *
  * Returns true when successfull, otherwise false.
  */
-bool snappy_uncompressed_length(const char *start, size_t n, size_t * result)
+bool rd_snappy_uncompressed_length(const char *start, size_t n, size_t * result)
 {
 	u32 v = 0;
 	const char *limit = start + n;
@@ -652,7 +653,7 @@ bool snappy_uncompressed_length(const char *start, size_t n, size_t * result)
 		return false;
 	}
 }
-EXPORT_SYMBOL(snappy_uncompressed_length);
+EXPORT_SYMBOL(rd_snappy_uncompressed_length);
 
 /*
  * The size of a compression block. Note that many parts of the compression
@@ -1298,12 +1299,41 @@ static int internal_uncompress(struct source *r,
 	return -EIO;
 }
 
-static inline int compress(struct snappy_env *env, struct source *reader,
-			   struct sink *writer)
+static int
+compress(struct snappy_env *env, struct source *reader, struct sink *writer)
 {
-	int err;
-	size_t written = 0;
+	int err = 0;
 	int N = available(reader);
+        size_t totes = N;
+
+	char *uncompressed = malloc(N);
+	if (uncompressed == NULL) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	while (N > 0) {
+		size_t fsize = 0;
+		const char *f = peek(reader, &fsize);
+		if (fsize == 0) {
+			err = -EIO;
+			goto out;
+		}
+		memcpy(uncompressed, f, fsize);
+		skip(reader, fsize);
+		N -= fsize;
+	}
+	size_t compressed_len = snappy_max_compressed_length(totes);
+	char *dest = sink_peek(writer, compressed_len);
+	int s = snappy_compress(uncompressed, totes, dest, &compressed_len);
+	if (s != SNAPPY_OK) {
+		err = -EIO;
+		goto out;
+	}
+	append(writer, dest, compressed_len);
+	
+
+#if 0	
 	char ulength[kmax32];
 	char *p = varint_encode32(ulength, N);
 
@@ -1372,8 +1402,12 @@ static inline int compress(struct snappy_env *env, struct source *reader,
 	}
 
 	err = 0;
+#endif
+	
 out:
+	free(uncompressed);
 	return err;
+
 }
 
 #ifdef SG
@@ -1422,7 +1456,7 @@ EXPORT_SYMBOL(snappy_compress_iov);
  * The environment does not keep state over individual calls
  * of this function, just preallocates the memory.
  */
-int snappy_compress(struct snappy_env *env,
+int rd_snappy_compress(struct snappy_env *env,
 		    const char *input,
 		    size_t input_length,
 		    char *compressed, size_t *compressed_length)
@@ -1440,7 +1474,7 @@ int snappy_compress(struct snappy_env *env,
 				   &iov_in, 1, input_length, 
 				   &iov_out, &out, compressed_length);
 }
-EXPORT_SYMBOL(snappy_compress);
+EXPORT_SYMBOL(rd_snappy_compress);
 
 int snappy_uncompress_iov(struct iovec *iov_in, int iov_in_len,
 			   size_t input_len, char *uncompressed)
@@ -1469,7 +1503,7 @@ EXPORT_SYMBOL(snappy_uncompress_iov);
  *
  * Return 0 on success, otherwise an negative error code.
  */
-int snappy_uncompress(const char *compressed, size_t n, char *uncompressed)
+int rd_snappy_uncompress(const char *compressed, size_t n, char *uncompressed)
 {
 	struct iovec iov = {
 		.iov_base = (char *)compressed,
@@ -1477,7 +1511,7 @@ int snappy_uncompress(const char *compressed, size_t n, char *uncompressed)
 	};
 	return snappy_uncompress_iov(&iov, 1, n, uncompressed);
 }
-EXPORT_SYMBOL(snappy_uncompress);
+EXPORT_SYMBOL(rd_snappy_uncompress);
 
 #else
 /**
